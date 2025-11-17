@@ -28,9 +28,15 @@ In my case, I've used an insert in the plastic of my tank in order to screw a 3d
 
 # Software
 
-Rename secrets_template.h into secrets.h and enter your credentials (wifi + MQTT settings)
+Rename secrets_template.h into secrets.h and enter your credentials : Wifi + MQTT settings + Bark settings (optional)
 
-Compile it: 
+MQTT is used if you want to integrate with Home Assistant and display the salt level in a lovelace card.  
+
+If you don't have Home Assistant and prefer to keep things simple but still want to receive a notification when the salt level is low, simply install Bark on your mobile and get the API key from there. Define your minimum level in centimeters from the top of the sensor (45cm by default). Bark will send the notification only once and will only reset once the tank is 3cm above the threshold again.
+
+You can change the frequency of the measurement: by default it is set at the beginning of main.cpp at 1hr.  
+
+Compile the code and upload it to the esp32: 
 
 ``` shell
 pio run -t clean
