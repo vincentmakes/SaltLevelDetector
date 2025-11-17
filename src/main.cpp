@@ -1,5 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
 #include <PubSubClient.h>
 #include "secrets.h"
 #include "ota/ota.h"
@@ -21,8 +23,11 @@ PubSubClient mqttClient(espClient);
 
 saltlevel::OTA ota;   // our OTA helper
 
+bool warningSent = false;   // track if we've already notified for current low level
+
+
 unsigned long lastMeasure = 0;
-const unsigned long MEASURE_INTERVAL_MS = 360000;
+const unsigned long MEASURE_INTERVAL_MS = 3600000; //3600000ms=1h
 
 // ---------------------------------------------------------------------------
 // Distance measurement
@@ -140,6 +145,51 @@ void publishDistance(float distanceCm) {
 #endif // MQTT_ENABLED
 
 // ---------------------------------------------------------------------------
+// Bark Notification
+// ---------------------------------------------------------------------------
+bool sendBarkNotification(float distanceCm) {
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("Cannot send Bark notification: WiFi not connected");
+        return false;
+    }
+
+    // Build a simple URL:
+    // https://api.day.app/<key>/Salt%20Level%20Low/Distance%20XX.Xcm
+    String url = String(BARK_SERVER) +
+                 "/" + BARK_KEY +
+                 "/Salt%20Level%20Low/Distance%20" +
+                 String(distanceCm, 1) + "cm";
+
+    Serial.print("Bark URL: ");
+    Serial.println(url);
+
+    WiFiClientSecure client;
+    client.setInsecure();  // skip certificate validation (simpler for hobby use)
+
+    HTTPClient https;
+    if (!https.begin(client, url)) {
+        Serial.println("HTTPS begin failed");
+        return false;
+    }
+
+    int httpCode = https.GET();
+    if (httpCode > 0) {
+        Serial.print("Bark HTTP status: ");
+        Serial.println(httpCode);
+        String payload = https.getString();
+        Serial.print("Bark response: ");
+        Serial.println(payload);
+    } else {
+        Serial.print("Bark request failed: ");
+        Serial.println(https.errorToString(httpCode));
+    }
+
+    https.end();
+    return (httpCode == 200);
+}
+
+
+// ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
 void setup() {
@@ -210,6 +260,34 @@ void loop() {
 
 #if MQTT_ENABLED
         publishDistance(distance);
+#endif
+
+#if BARK_ENABLED
+        // ------------------- Threshold logic -------------------
+        // Salt tank:
+        //   - Full  ~20 cm
+        //   - Empty ~58 cm
+        //   - Warn  >= SALT_WARN_DISTANCE_CM (e.g. 45 cm)
+        //
+        // We:
+        //   - Send a Bark notification once when distance crosses ABOVE the threshold
+        //   - Reset warningSent when the distance goes back below (i.e. you refilled)
+
+        if (distance > 0) {
+            if (!warningSent && distance >= SALT_WARN_DISTANCE_CM) {
+                Serial.println("Threshold reached -> sending Bark notification...");
+                if (sendBarkNotification(distance)) {
+                    warningSent = true;
+                    Serial.println("Bark notification sent, warningSent = true");
+                } else {
+                    Serial.println("Bark notification failed");
+                }
+            } else if (warningSent && distance <= (SALT_WARN_DISTANCE_CM - 3.0f)) {
+                // Add a little hysteresis (3 cm) to avoid rapid flip-flop
+                warningSent = false;
+                Serial.println("Salt refilled / level ok again, warningSent reset = false");
+            }
+        }
 #endif
     }
 }
