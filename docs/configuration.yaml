@@ -1,0 +1,21 @@
+template:
+#Keep 20 to be the minimum level: this is a hardware limitation of the ultrasonic sensor. 
+#In the case below, 58 is the max depth of the tank.
+  - sensor:
+      - name: "Salt Level"
+        unique_id: "salt_level_percent"
+        unit_of_measurement: "%"
+        icon: "mdi:shaker-outline"
+        state: >
+          {% set d = states('sensor.salt_tank_distance') | float(0) %}
+
+          {% if d <= 0 %}
+            unknown
+          {% elif d >= 58 %}
+            0
+          {% elif d <= 20 %}
+            100
+          {% else %}
+            {{ ((58 - d) / (58 - 20) * 100) | round(0) }}
+          {% endif %}
+    
