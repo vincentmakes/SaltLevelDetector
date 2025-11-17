@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include "secrets.h"
+#include "ota/ota.h"
 
 // ---------------------------------------------------------------------------
 // Pins
@@ -18,8 +19,10 @@ WiFiClient espClient;
 PubSubClient mqttClient(espClient);
 #endif
 
+saltlevel::OTA ota;   // our OTA helper
+
 unsigned long lastMeasure = 0;
-const unsigned long MEASURE_INTERVAL_MS = 60000;
+const unsigned long MEASURE_INTERVAL_MS = 360000;
 
 // ---------------------------------------------------------------------------
 // Distance measurement
@@ -149,12 +152,28 @@ void setup() {
     Serial.println("JSN-SR04T distance measurement with WiFi + MQTT");
 
     connectWiFi();
+    ota.setup();
 
 #if MQTT_ENABLED
     mqttClient.setServer(MQTT_HOST, MQTT_PORT);
     mqttClient.setCallback(mqttCallback);
     connectMqtt();
 #endif
+
+        float distance = readDistanceCm();
+
+        if (distance < 0) {
+            Serial.println("Distance: out of range / no echo");
+        } else {
+            Serial.print("Distance: ");
+            Serial.print(distance, 2);
+            Serial.println(" cm");
+        }
+
+#if MQTT_ENABLED
+        publishDistance(distance);
+#endif
+
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +184,7 @@ void loop() {
     if (WiFi.status() != WL_CONNECTED) {
         connectWiFi();
     }
+    ota.loop();
 
 #if MQTT_ENABLED
     // Keep MQTT connected
