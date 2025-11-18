@@ -61,5 +61,16 @@ severity:
   yellow: 35
   red: 0
 ```
+# Advanced Features
+
+Browsing to the IP address of the ESP32, you will find a webpage to display the status of the salt level, as well as adjust the settings (retained at reboot). The language of the webpage can be switched to french.  
+The intent behind this was to make it accessible for people without a Home Assistant setup and needed some autonomy in adjustment of the settings without having to recompile the firmware.  
+
+<img width="462"  alt="Screenshot 2025-11-18 at 16 30 43" src="https://github.com/user-attachments/assets/bed83605-f0dd-4e5d-b5df-9785d36035b2" />  
+
+<img width="462"  alt="Screenshot 2025-11-18 at 16 31 00" src="https://github.com/user-attachments/assets/6025a7d5-7c94-4358-bde8-003e0832056f" />
+
+
+
 
 
