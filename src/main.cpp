@@ -1,9 +1,10 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <HTTPClient.h>
-#include <PubSubClient.h>
 #include "secrets.h"
+
+#include "wifi/wifi.h"
+#include "mqtt/mqtt.h"
+#include "bark/bark.h"
 #include "ota/ota.h"
 
 // ---------------------------------------------------------------------------
@@ -15,179 +16,48 @@ const int ECHO_PIN = 18;   // GPIO18 -> JSN-SR04T Echo
 // ---------------------------------------------------------------------------
 // Globals
 // ---------------------------------------------------------------------------
-WiFiClient espClient;
+saltlevel::Config gConfig;
+saltlevel::OTA    ota;
 
-#if MQTT_ENABLED
-PubSubClient mqttClient(espClient);
-#endif
-
-saltlevel::OTA ota;   // our OTA helper
-
-bool warningSent = false;   // track if we've already notified for current low level
-
-
+bool warningSent = false;
 unsigned long lastMeasure = 0;
-const unsigned long MEASURE_INTERVAL_MS = 3600000; //3600000ms=1h
+const unsigned long MEASURE_INTERVAL_MS = 3600000UL;  // 1 hour
 
 // ---------------------------------------------------------------------------
 // Distance measurement
 // ---------------------------------------------------------------------------
 float readDistanceCm() {
-    // Ensure trigger is LOW
     digitalWrite(TRIG_PIN, LOW);
     delayMicroseconds(2);
 
-    // 10 µs HIGH pulse to trigger the measurement
     digitalWrite(TRIG_PIN, HIGH);
     delayMicroseconds(10);
     digitalWrite(TRIG_PIN, LOW);
 
-    // Measure the length of the echo pulse (in microseconds)
-    // Timeout ~30 ms (30000 µs) ~ max distance ~5 m
     unsigned long duration = pulseIn(ECHO_PIN, HIGH, 30000);
-
     if (duration == 0) {
-        // No echo received (out of range or sensor error)
         return -1.0f;
     }
 
-    // Speed of sound ~343 m/s => 0.0343 cm/µs
-    // Distance (cm) = (duration_us * 0.0343) / 2
-    float distanceCm = (duration * 0.0343f) / 2.0f;
-    return distanceCm;
+    // speed of sound ~0.0343 cm/us, divide by 2 for round trip
+    return (duration * 0.0343f) / 2.0f;
 }
 
 // ---------------------------------------------------------------------------
-// WiFi
+// Fullness calculation
 // ---------------------------------------------------------------------------
-void connectWiFi() {
-    if (WiFi.status() == WL_CONNECTED) {
-        return;
+float computeFullPercent(float distanceCm) {
+    if (gConfig.emptyDistanceCm == gConfig.fullDistanceCm) {
+        return -1.0f;
     }
+    float full  = gConfig.fullDistanceCm;
+    float empty = gConfig.emptyDistanceCm;
 
-    Serial.print("Connecting to WiFi: ");
-    Serial.println(WIFI_SSID);
-
-    WiFi.mode(WIFI_STA);
-    WiFi.begin(WIFI_SSID, WIFI_PASS);
-
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
-    }
-
-    Serial.println();
-    Serial.print("WiFi connected, IP address: ");
-    Serial.println(WiFi.localIP());
+    float percent = (empty - distanceCm) / (empty - full) * 100.0f;
+    if (percent < 0)   percent = 0;
+    if (percent > 100) percent = 100;
+    return percent;
 }
-
-// ---------------------------------------------------------------------------
-// MQTT
-// ---------------------------------------------------------------------------
-#if MQTT_ENABLED
-
-void mqttCallback(char* topic, byte* payload, unsigned int length) {
-    // No incoming commands handled for now
-    (void)topic;
-    (void)payload;
-    (void)length;
-}
-
-void connectMqtt() {
-    if (mqttClient.connected()) {
-        return;
-    }
-
-    Serial.print("Connecting to MQTT broker: ");
-    Serial.print(MQTT_HOST);
-    Serial.print(":");
-    Serial.println(MQTT_PORT);
-
-    // Unique-ish client ID based on MAC
-    String clientId = "esp32-saltlevel-";
-    clientId += String((uint32_t)ESP.getEfuseMac(), HEX);
-
-    while (!mqttClient.connected()) {
-        Serial.print("Attempting MQTT connection... ");
-        if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
-            Serial.println("connected");
-            // Add subscriptions here if needed
-        } else {
-            Serial.print("failed, rc=");
-            Serial.print(mqttClient.state());
-            Serial.println(" - retrying in 5 seconds");
-            delay(5000);
-        }
-    }
-}
-
-void publishDistance(float distanceCm) {
-    if (!mqttClient.connected()) return;
-
-    char topic[128];
-    snprintf(topic, sizeof(topic), "%s/distance_cm", MQTT_PREFIX);
-
-    char payload[32];
-    // If distance < 0, publish -1.00
-    dtostrf(distanceCm, 0, 2, payload);
-
-    bool ok = mqttClient.publish(topic, payload, true); // retained
-    if (!ok) {
-        Serial.println("MQTT publish failed");
-    } else {
-        Serial.print("MQTT publish -> ");
-        Serial.print(topic);
-        Serial.print(" = ");
-        Serial.println(payload);
-    }
-}
-
-#endif // MQTT_ENABLED
-
-// ---------------------------------------------------------------------------
-// Bark Notification
-// ---------------------------------------------------------------------------
-bool sendBarkNotification(float distanceCm) {
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("Cannot send Bark notification: WiFi not connected");
-        return false;
-    }
-
-    // Build a simple URL:
-    // https://api.day.app/<key>/Salt%20Level%20Low/Distance%20XX.Xcm
-    String url = String(BARK_SERVER) +
-                 "/" + BARK_KEY +
-                 "/Salt%20Level%20Low/Distance%20" +
-                 String(distanceCm, 1) + "cm";
-
-    Serial.print("Bark URL: ");
-    Serial.println(url);
-
-    WiFiClientSecure client;
-    client.setInsecure();  // skip certificate validation (simpler for hobby use)
-
-    HTTPClient https;
-    if (!https.begin(client, url)) {
-        Serial.println("HTTPS begin failed");
-        return false;
-    }
-
-    int httpCode = https.GET();
-    if (httpCode > 0) {
-        Serial.print("Bark HTTP status: ");
-        Serial.println(httpCode);
-        String payload = https.getString();
-        Serial.print("Bark response: ");
-        Serial.println(payload);
-    } else {
-        Serial.print("Bark request failed: ");
-        Serial.println(https.errorToString(httpCode));
-    }
-
-    https.end();
-    return (httpCode == 200);
-}
-
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -199,50 +69,61 @@ void setup() {
     pinMode(TRIG_PIN, OUTPUT);
     pinMode(ECHO_PIN, INPUT);
 
-    Serial.println("JSN-SR04T distance measurement with WiFi + MQTT");
+    Serial.println("Salt Level Monitor (WiFi + MQTT + Bark + OTA)");
+
+    // Defaults – these will be overridden by NVS (OTA) if values are stored
+    gConfig.fullDistanceCm  = 20.0f;  // hardware/min distance when FULL
+    gConfig.emptyDistanceCm = 58.0f;  // EMPTY (bottom)
+    gConfig.warnDistanceCm  = 45.0f;
+    gConfig.language        = 0;      // 0 = EN, 1 = FR
+
+#ifdef BARK_KEY
+    strncpy(gConfig.barkKey, BARK_KEY, sizeof(gConfig.barkKey));
+    gConfig.barkKey[sizeof(gConfig.barkKey) - 1] = '\0';
+#else
+    gConfig.barkKey[0] = '\0';
+#endif
+
+    // IMPORTANT: use BARK_ENABLED only as a *default* (runtime),
+    // NVS/OTA will override via gConfig.barkEnabled.
+#ifdef BARK_ENABLED
+    gConfig.barkEnabled = BARK_ENABLED;   // true/false from secrets.h
+#else
+    gConfig.barkEnabled = false;
+#endif
 
     connectWiFi();
+
+    // Bind config + callbacks BEFORE ota.setup()
+    ota.setConfig(&gConfig);
+    ota.setDistanceCallback(readDistanceCm);
+    ota.setPublishCallback(mqttPublishDistance);
     ota.setup();
 
-#if MQTT_ENABLED
-    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
-    mqttClient.setCallback(mqttCallback);
-    connectMqtt();
-#endif
+    mqttSetup();
 
-        float distance = readDistanceCm();
-
-        if (distance < 0) {
-            Serial.println("Distance: out of range / no echo");
-        } else {
-            Serial.print("Distance: ");
-            Serial.print(distance, 2);
-            Serial.println(" cm");
-        }
-
-#if MQTT_ENABLED
-        publishDistance(distance);
-#endif
-
+    // Initial measurement at boot
+    float distance = readDistanceCm();
+    if (distance < 0) {
+        Serial.println("Distance: out of range / no echo");
+    } else {
+        Serial.print("Distance at boot: ");
+        Serial.print(distance, 2);
+        Serial.println(" cm");
+    }
+    mqttPublishDistance(distance);
 }
 
 // ---------------------------------------------------------------------------
 // Main loop
 // ---------------------------------------------------------------------------
 void loop() {
-    // Keep WiFi connected
     if (WiFi.status() != WL_CONNECTED) {
         connectWiFi();
     }
-    ota.loop();
 
-#if MQTT_ENABLED
-    // Keep MQTT connected
-    if (!mqttClient.connected()) {
-        connectMqtt();
-    }
-    mqttClient.loop();
-#endif
+    ota.loop();
+    mqttLoop();
 
     unsigned long now = millis();
     if (now - lastMeasure >= MEASURE_INTERVAL_MS) {
@@ -258,36 +139,29 @@ void loop() {
             Serial.println(" cm");
         }
 
-#if MQTT_ENABLED
-        publishDistance(distance);
-#endif
+        mqttPublishDistance(distance);
 
-#if BARK_ENABLED
-        // ------------------- Threshold logic -------------------
-        // Salt tank:
-        //   - Full  ~20 cm
-        //   - Empty ~58 cm
-        //   - Warn  >= SALT_WARN_DISTANCE_CM (e.g. 45 cm)
-        //
-        // We:
-        //   - Send a Bark notification once when distance crosses ABOVE the threshold
-        //   - Reset warningSent when the distance goes back below (i.e. you refilled)
+        // ---------------- Bark logic: purely runtime, no #if BARK_ENABLED ----------------
+        float percent = computeFullPercent(distance);
 
-        if (distance > 0) {
-            if (!warningSent && distance >= SALT_WARN_DISTANCE_CM) {
+        if (gConfig.barkEnabled &&                 // from secrets.h default + OTA + NVS
+            distance > 0 &&
+            gConfig.warnDistanceCm > 0 &&
+            percent >= 0.0f) {
+
+            if (!warningSent && distance >= gConfig.warnDistanceCm) {
                 Serial.println("Threshold reached -> sending Bark notification...");
-                if (sendBarkNotification(distance)) {
+                if (barkSendLowSaltNotification(gConfig.barkKey, distance, percent)) {
                     warningSent = true;
                     Serial.println("Bark notification sent, warningSent = true");
                 } else {
                     Serial.println("Bark notification failed");
                 }
-            } else if (warningSent && distance <= (SALT_WARN_DISTANCE_CM - 3.0f)) {
-                // Add a little hysteresis (3 cm) to avoid rapid flip-flop
+            } else if (warningSent && distance <= (gConfig.warnDistanceCm - 3.0f)) {
                 warningSent = false;
                 Serial.println("Salt refilled / level ok again, warningSent reset = false");
             }
         }
-#endif
+        // -------------------------------------------------------------------
     }
 }
