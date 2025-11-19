@@ -5,18 +5,26 @@
 
 namespace saltlevel {
 
-  // 0 = English, 1 = French
-  struct Config {
-    float   fullDistanceCm;   // tank FULL at this distance (hardware min)
-    float   emptyDistanceCm;  // tank EMPTY at this distance (max depth)
-    float   warnDistanceCm;   // Bark warning distance
-    char    barkKey[128];     // Bark device key
-    uint8_t language;         // 0 = EN, 1 = FR
-    bool    barkEnabled;      // runtime Bark on/off
+  // Language enumeration
+  enum class Language : uint8_t {
+    ENGLISH = 0,
+    FRENCH = 1
   };
 
+  // Configuration structure
+  struct Config {
+    float    fullDistanceCm;      // Tank FULL at this distance (hardware min)
+    float    emptyDistanceCm;     // Tank EMPTY at this distance (max depth)
+    float    warnDistanceCm;      // Bark warning distance
+    char     barkKey[128];        // Bark device key
+    char     otaPassword[64];     // OTA update password
+    Language language;            // UI language
+    bool     barkEnabled;         // Runtime Bark on/off
+  };
+
+  // Callback types
   typedef float (*DistanceCallback)();
-  typedef void  (*PublishCallback)(float);
+  typedef bool  (*PublishCallback)(float);
 
   class OTA {
     public:
@@ -26,8 +34,11 @@ namespace saltlevel {
       void setDistanceCallback(DistanceCallback cb);
       void setPublishCallback(PublishCallback cb);
       void setConfig(Config* cfg);
+      
+      // Validation
+      static bool validateConfig(const Config* cfg);
   };
 
 }
 
-#endif
+#endif // OTA_H
