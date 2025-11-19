@@ -8,11 +8,13 @@
 #include <Update.h>
 #include <Preferences.h>
 #include <math.h>
+#include "../constants.h"
+#include "../logger.h"
 
 namespace saltlevel {
 
   // -------------------------------------------------------------------------
-  // Responsive, bilingual HTML UI (Tank → Settings → OTA)
+  // HTML UI - Responsive, bilingual (Tank → Settings → OTA)
   // -------------------------------------------------------------------------
   static const char serverIndex[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -21,6 +23,9 @@ namespace saltlevel {
   <meta charset="utf-8">
   <title>{{STR_TITLE}}</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
   <style>
     :root {
@@ -55,6 +60,7 @@ namespace saltlevel {
     }
     input[type="number"],
     input[type="text"],
+    input[type="password"],
     select {
       width: 100%;
       box-sizing: border-box;
@@ -80,6 +86,7 @@ namespace saltlevel {
       font-weight: 600;
       background: #1976d2;
       color: #fff;
+      cursor: pointer;
     }
     input[type="submit"]:active,
     button:active {
@@ -176,6 +183,11 @@ namespace saltlevel {
       width: auto;
       margin-top: 0;
     }
+    .help-text {
+      font-size: 0.8rem;
+      color: #666;
+      margin-top: 4px;
+    }
 
     @media (prefers-color-scheme: dark) {
       body {
@@ -191,6 +203,7 @@ namespace saltlevel {
       }
       input[type="number"],
       input[type="text"],
+      input[type="password"],
       select {
         border-color: #555;
         background: #111;
@@ -212,12 +225,15 @@ namespace saltlevel {
         background: #2a2a2a;
         color: #ccc;
       }
+      .help-text {
+        color: #aaa;
+      }
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>{{STR_H1}}</h1>
+    <h1>{{STR_H1}} <small style="font-size:0.5em;color:#999;">v2.0.3</small></h1>
 
     <div class="status-row">
       <div class="chip chip-online">
@@ -258,6 +274,7 @@ namespace saltlevel {
         <label>
           {{STR_FULL}}
           <input type="number" step="0.1" name="full_cm" value="{{FULL_CM}}" readonly>
+          <div class="help-text">Hardware limitation - do not change</div>
         </label>
         <label>
           {{STR_EMPTY}}
@@ -290,7 +307,11 @@ namespace saltlevel {
     <div class="section">
       <h2>{{STR_OTA}}</h2>
       <form method="POST" action="#" enctype="multipart/form-data" id="upload_form">
-        <input type="file" name="update" style="margin-top:6px;">
+        <label>
+          {{STR_OTA_PASSWORD}}
+          <input type="password" name="password" id="ota_password" required>
+        </label>
+        <input type="file" name="update" style="margin-top:6px;" required>
         <input type="submit" value="Update">
       </form>
       <div id="prg">Progress: 0%</div>
@@ -298,17 +319,23 @@ namespace saltlevel {
   </div>
 
   <script>
-    // OTA upload
+    // OTA upload with password
     $('#upload_form').on('submit', function(e){
       e.preventDefault();
       var form = $('#upload_form')[0];
       var data = new FormData(form);
+      
+      var password = $('#ota_password').val();
+      
       $.ajax({
         url: '/update',
         type: 'POST',
         data: data,
         contentType: false,
         processData: false,
+        beforeSend: function(xhr) {
+          xhr.setRequestHeader('Authorization', 'Basic ' + btoa('admin:' + password));
+        },
         xhr: function() {
           var xhr = new window.XMLHttpRequest();
           xhr.upload.addEventListener('progress', function(evt){
@@ -319,8 +346,28 @@ namespace saltlevel {
           }, false);
           return xhr;
         },
-        success: function(d, s) { console.log('OTA success'); },
-        error: function(a, b, c) { console.log('OTA error'); }
+        success: function(d, s) {
+          $('#prg').html('Update successful! Device rebooting...<br><small>Page will reload in 10 seconds</small>');
+          setTimeout(function() {
+            window.location.reload();
+          }, 10000);
+        },
+        error: function(xhr, status, error) {
+          // Check if it's a connection error (device rebooted during response)
+          if (xhr.status === 0 && status === 'error') {
+            // Likely a successful update followed by reboot
+            $('#prg').html('Upload complete! Device rebooting...<br><small>Page will reload in 15 seconds</small>');
+            setTimeout(function() {
+              window.location.reload();
+            }, 15000);
+          } else if (xhr.status === 401) {
+            $('#prg').html('Error: Invalid password');
+          } else if (xhr.status === 500) {
+            $('#prg').html('Error: Update failed - ' + error);
+          } else {
+            $('#prg').html('Error: ' + error + ' (Status: ' + xhr.status + ')');
+          }
+        }
       });
     });
 
@@ -368,6 +415,9 @@ namespace saltlevel {
       doMeasure();
     });
   </script>
+  <div style="text-align:center; margin-top:24px; padding:16px; color:#999; font-size:0.8em;">
+    Firmware v2.0.3 | Build: {{BUILD_TIME}}
+  </div>
 </body>
 </html>
 )rawliteral";
@@ -375,11 +425,12 @@ namespace saltlevel {
   // -------------------------------------------------------------------------
   // Globals
   // -------------------------------------------------------------------------
-  static WebServer       server(80);
+  static WebServer       server(Network::HTTP_PORT);
   static DistanceCallback distanceCb = nullptr;
   static PublishCallback  publishCb  = nullptr;
   static Config*          cfg        = nullptr;
   static Preferences      prefs;
+  static bool             otaAuthFailed = false;  // Track auth failure
 
   // -------------------------------------------------------------------------
   // Config persistence
@@ -395,7 +446,7 @@ namespace saltlevel {
     cfg->warnDistanceCm  = prefs.getFloat("warn_cm",  cfg->warnDistanceCm);
 
     // Bark key: only override if something stored
-    char tmp[128];
+    char tmp[Limits::BARK_KEY_LENGTH];
     size_t len = prefs.getString("bark_key", tmp, sizeof(tmp));
     if (len > 0) {
       tmp[sizeof(tmp) - 1] = '\0';
@@ -403,13 +454,22 @@ namespace saltlevel {
       cfg->barkKey[sizeof(cfg->barkKey) - 1] = '\0';
     }
 
+    // Note: OTA password is NOT loaded from NVS - it must be set in secrets.h
+    // Clean up any old ota_pass that might be in NVS from previous versions
+    if (prefs.isKey("ota_pass")) {
+      prefs.remove("ota_pass");
+      Logger::info("Removed old OTA password from NVS");
+    }
+
     cfg->barkEnabled = prefs.getBool("bark_en", cfg->barkEnabled);
 
-    uint8_t lang = prefs.getUChar("lang", cfg->language);
+    uint8_t lang = prefs.getUChar("lang", static_cast<uint8_t>(cfg->language));
     if (lang > 1) lang = 0;
-    cfg->language = lang;
+    cfg->language = static_cast<Language>(lang);
 
     prefs.end();
+    
+    Logger::info("Configuration loaded from NVS");
   }
 
   static void saveConfigToNvs() {
@@ -420,16 +480,20 @@ namespace saltlevel {
     prefs.putFloat("empty_cm", cfg->emptyDistanceCm);
     prefs.putFloat("warn_cm",  cfg->warnDistanceCm);
     prefs.putString("bark_key", String(cfg->barkKey));
+    // Note: OTA password is NOT saved to NVS - it must be set in secrets.h
     prefs.putBool("bark_en", cfg->barkEnabled);
-    prefs.putUChar("lang", cfg->language);
+    prefs.putUChar("lang", static_cast<uint8_t>(cfg->language));
     prefs.end();
+    
+    Logger::info("Configuration saved to NVS");
   }
 
+  // Continued in Part 2...
   // -------------------------------------------------------------------------
   // Translations
   // -------------------------------------------------------------------------
-  static void applyTranslations(String& page, uint8_t lang) {
-    if (lang == 1) {
+  static void applyTranslations(String& page, Language lang) {
+    if (lang == Language::FRENCH) {
       // French
       page.replace("{{STR_TITLE}}",       "Surveillance du niveau de sel");
       page.replace("{{STR_H1}}",          "Surveillance du niveau de sel");
@@ -441,6 +505,7 @@ namespace saltlevel {
       page.replace("{{STR_WARN}}",        "Distance d&#39;avertissement Bark (cm) :");
       page.replace("{{STR_BARK_KEY}}",    "Clé Bark :");
       page.replace("{{STR_BARK_ENABLE}}", "Activer les notifications Bark");
+      page.replace("{{STR_OTA_PASSWORD}}", "Mot de passe OTA :");
       page.replace("{{STR_SAVE}}",        "Enregistrer les réglages");
       page.replace("{{STR_CURRENT}}",     "Niveau actuel");
       page.replace("{{STR_MEASURE}}",     "Mesurer maintenant");
@@ -458,6 +523,7 @@ namespace saltlevel {
       page.replace("{{STR_WARN}}",        "Bark warning distance (cm):");
       page.replace("{{STR_BARK_KEY}}",    "Bark key:");
       page.replace("{{STR_BARK_ENABLE}}", "Enable Bark notifications");
+      page.replace("{{STR_OTA_PASSWORD}}", "OTA password:");
       page.replace("{{STR_SAVE}}",        "Save settings");
       page.replace("{{STR_CURRENT}}",     "Current Level");
       page.replace("{{STR_MEASURE}}",     "Measure now");
@@ -465,7 +531,7 @@ namespace saltlevel {
       page.replace("{{STR_FULLNESS}}",    "Fullness:");
     }
 
-    if (lang == 1) {
+    if (lang == Language::FRENCH) {
       page.replace("{{LANG_EN_SELECTED}}", "");
       page.replace("{{LANG_FR_SELECTED}}", "selected");
     } else {
@@ -475,193 +541,379 @@ namespace saltlevel {
   }
 
   // -------------------------------------------------------------------------
-  // Public methods
+  // Validation
   // -------------------------------------------------------------------------
-  void OTA::setDistanceCallback(DistanceCallback cb) {
-    distanceCb = cb;
-  }
-
-  void OTA::setPublishCallback(PublishCallback cb) {
-    publishCb = cb;
-  }
-
-  void OTA::setConfig(Config* c) {
-    cfg = c;
-  }
-
-  void OTA::setup() {
-    // Load persisted config (overriding defaults from main, incl. Bark enabled/disabled)
-    loadConfigFromNvs();
-
-    if (!MDNS.begin("saltlevel-esp32")) {
-      Serial.println("Error starting mDNS");
-    } else {
-      Serial.println("mDNS responder started: http://saltlevel-esp32.local/");
+  bool OTA::validateConfig(const Config* config) {
+    if (!config) {
+      Logger::error("Validation: config is null");
+      return false;
     }
 
-    // Root page
-    server.on("/", HTTP_GET, []() {
-      String page = String(serverIndex);
+    // Validate full distance
+    if (config->fullDistanceCm < 10.0f || config->fullDistanceCm > 100.0f) {
+      Logger::errorf("Validation failed: full distance %.1f out of range [10-100]",
+                    config->fullDistanceCm);
+      return false;
+    }
 
-      if (cfg) {
-        page.replace("{{FULL_CM}}",  String(cfg->fullDistanceCm, 1));
-        page.replace("{{EMPTY_CM}}", String(cfg->emptyDistanceCm, 1));
-        page.replace("{{WARN_CM}}",  String(cfg->warnDistanceCm, 1));
-        page.replace("{{BARK_KEY}}", String(cfg->barkKey));
-        page.replace("{{BARK_EN_CHECKED}}", cfg->barkEnabled ? "checked" : "");
-        applyTranslations(page, cfg->language);
-      } else {
-        page.replace("{{FULL_CM}}",  "20.0");
-        page.replace("{{EMPTY_CM}}", "58.0");
-        page.replace("{{WARN_CM}}",  "45.0");
-        page.replace("{{BARK_KEY}}", "");
-        page.replace("{{BARK_EN_CHECKED}}", "");
-        applyTranslations(page, 0);
-      }
+    // Validate empty distance
+    if (config->emptyDistanceCm <= config->fullDistanceCm) {
+      Logger::errorf("Validation failed: empty distance %.1f must be > full distance %.1f",
+                    config->emptyDistanceCm, config->fullDistanceCm);
+      return false;
+    }
 
-      server.sendHeader("Connection", "close");
-      server.send(200, "text/html", page);
-    });
+    if (config->emptyDistanceCm > 200.0f) {
+      Logger::errorf("Validation failed: empty distance %.1f too large", 
+                    config->emptyDistanceCm);
+      return false;
+    }
 
-    // Settings POST
-    server.on("/config", HTTP_POST, []() {
-      if (!cfg) {
-        server.send(500, "text/plain", "No config bound");
-        return;
-      }
+    // Validate warn distance
+    if (config->warnDistanceCm < config->fullDistanceCm || 
+        config->warnDistanceCm > config->emptyDistanceCm) {
+      Logger::errorf("Validation failed: warn distance %.1f not in range [%.1f-%.1f]",
+                    config->warnDistanceCm, config->fullDistanceCm, config->emptyDistanceCm);
+      return false;
+    }
 
-      if (server.hasArg("full_cm")) {
-        // still accept, even though field is readonly; but normally unchanged
-        cfg->fullDistanceCm = server.arg("full_cm").toFloat();
-      }
-      if (server.hasArg("empty_cm")) {
-        cfg->emptyDistanceCm = server.arg("empty_cm").toFloat();
-      }
-      if (server.hasArg("warn_cm")) {
-        cfg->warnDistanceCm = server.arg("warn_cm").toFloat();
-      }
-      if (server.hasArg("bark_key")) {
-        String key = server.arg("bark_key");
-        key.trim();
-        key.toCharArray(cfg->barkKey, sizeof(cfg->barkKey));
-        cfg->barkKey[sizeof(cfg->barkKey) - 1] = '\0';
-      }
-      // checkbox: present when checked, absent when not
-      cfg->barkEnabled = server.hasArg("bark_en");
+    Logger::debug("Configuration validation passed");
+    return true;
+  }
 
-      if (server.hasArg("lang")) {
-        String l = server.arg("lang");
-        l.toLowerCase();
-        cfg->language = (l == "fr") ? 1 : 0;
-      }
+  // -------------------------------------------------------------------------
+  // Route Handlers
+  // -------------------------------------------------------------------------
+  static void handleRoot() {
+    String page = String(serverIndex);
 
-      saveConfigToNvs();
+    // Inject compile time (C preprocessor macros work here)
+    String buildTime = String(__DATE__) + " " + String(__TIME__);
+    page.replace("{{BUILD_TIME}}", buildTime);
 
-      server.sendHeader("Location", "/");
-      server.send(303);
-    });
+    if (cfg) {
+      page.replace("{{FULL_CM}}",  String(cfg->fullDistanceCm, 1));
+      page.replace("{{EMPTY_CM}}", String(cfg->emptyDistanceCm, 1));
+      page.replace("{{WARN_CM}}",  String(cfg->warnDistanceCm, 1));
+      page.replace("{{BARK_KEY}}", String(cfg->barkKey));
+      page.replace("{{BARK_EN_CHECKED}}", cfg->barkEnabled ? "checked" : "");
+      applyTranslations(page, cfg->language);
+    } else {
+      page.replace("{{FULL_CM}}",  String(Sensor::DEFAULT_FULL_DISTANCE_CM, 1));
+      page.replace("{{EMPTY_CM}}", String(Sensor::DEFAULT_EMPTY_DISTANCE_CM, 1));
+      page.replace("{{WARN_CM}}",  String(Sensor::DEFAULT_WARN_DISTANCE_CM, 1));
+      page.replace("{{BARK_KEY}}", "");
+      page.replace("{{BARK_EN_CHECKED}}", "");
+      applyTranslations(page, Language::ENGLISH);
+    }
 
-    // Distance measurement (also publishes to MQTT via callback)
-    server.on("/measure", HTTP_GET, []() {
-      if (!distanceCb) {
-        server.send(500, "application/json", "{\"error\":\"no_callback\"}");
-        return;
-      }
+    // Add cache-busting headers
+    server.sendHeader("Connection", "close");
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "0");
+    server.sendHeader("ETag", String(millis()));  // Unique ETag every request
+    server.send(200, "text/html", page);
+  }
 
-      float d = distanceCb();
+  static void handleConfig() {
+    if (!cfg) {
+      server.send(500, "text/plain", "No config bound");
+      Logger::error("Config POST failed: no config bound");
+      return;
+    }
 
-      if (publishCb) {
-        publishCb(d);
-      }
+    Logger::info("Processing configuration update...");
 
-      float percent = -1.0f;
-      if (cfg && cfg->emptyDistanceCm != cfg->fullDistanceCm) {
-        float full  = cfg->fullDistanceCm;
-        float empty = cfg->emptyDistanceCm;
-        percent = (empty - d) / (empty - full) * 100.0f;
-        if (percent < 0)   percent = 0;
-        if (percent > 100) percent = 100;
-      }
+    // Parse form data
+    if (server.hasArg("full_cm")) {
+      // Accept but normally unchanged (readonly field)
+      cfg->fullDistanceCm = server.arg("full_cm").toFloat();
+    }
+    if (server.hasArg("empty_cm")) {
+      cfg->emptyDistanceCm = server.arg("empty_cm").toFloat();
+    }
+    if (server.hasArg("warn_cm")) {
+      cfg->warnDistanceCm = server.arg("warn_cm").toFloat();
+    }
+    if (server.hasArg("bark_key")) {
+      String key = server.arg("bark_key");
+      key.trim();
+      key.toCharArray(cfg->barkKey, sizeof(cfg->barkKey));
+      cfg->barkKey[sizeof(cfg->barkKey) - 1] = '\0';
+    }
+    
+    // Checkbox: present when checked, absent when not
+    cfg->barkEnabled = server.hasArg("bark_en");
 
-      char json[128];
-      snprintf(json, sizeof(json),
-               "{\"distance\":%.2f,\"percent\":%.1f}", d, percent);
+    if (server.hasArg("lang")) {
+      String l = server.arg("lang");
+      l.toLowerCase();
+      cfg->language = (l == "fr") ? Language::FRENCH : Language::ENGLISH;
+    }
 
-      server.send(200, "application/json", json);
-    });
+    // Validate before saving
+    if (!OTA::validateConfig(cfg)) {
+      server.send(400, "text/plain", "Invalid configuration - check serial logs");
+      return;
+    }
 
-    // Simple API status endpoint (for integrations)
-    server.on("/api/status", HTTP_GET, []() {
-      if (!distanceCb || !cfg) {
-        server.send(500, "application/json", "{\"error\":\"no_config_or_callback\"}");
-        return;
-      }
+    saveConfigToNvs();
 
-      float d = distanceCb();
-      float percent = -1.0f;
-      if (cfg->emptyDistanceCm != cfg->fullDistanceCm) {
-        float full  = cfg->fullDistanceCm;
-        float empty = cfg->emptyDistanceCm;
-        percent = (empty - d) / (empty - full) * 100.0f;
-        if (percent < 0)   percent = 0;
-        if (percent > 100) percent = 100;
-      }
+    Logger::infof("Configuration updated: Tank %.1f-%.1f cm, Warn %.1f cm, Bark %s",
+                 cfg->fullDistanceCm, cfg->emptyDistanceCm, cfg->warnDistanceCm,
+                 cfg->barkEnabled ? "ON" : "OFF");
 
-      char json[256];
+    server.sendHeader("Location", "/");
+    server.send(303);
+  }
+
+  static void handleMeasure() {
+    if (!distanceCb) {
+      server.send(500, "application/json", "{\"error\":\"no_callback\"}");
+      Logger::error("Measure failed: no distance callback");
+      return;
+    }
+
+    float d = distanceCb();
+    Logger::debugf("Measure endpoint called: %.2f cm", d);
+
+    if (publishCb) {
+      publishCb(d);
+    }
+
+    float percent = -1.0f;
+    if (cfg && cfg->emptyDistanceCm != cfg->fullDistanceCm) {
+      float full  = cfg->fullDistanceCm;
+      float empty = cfg->emptyDistanceCm;
+      percent = (empty - d) / (empty - full) * 100.0f;
+      if (percent < 0)   percent = 0;
+      if (percent > 100) percent = 100;
+    }
+
+    char json[128];
+    snprintf(json, sizeof(json),
+             "{\"distance\":%.2f,\"percent\":%.1f}", d, percent);
+
+    server.send(200, "application/json", json);
+  }
+
+  static void handleApiStatus() {
+    if (!distanceCb || !cfg) {
+      server.send(500, "application/json", "{\"error\":\"no_config_or_callback\"}");
+      return;
+    }
+
+    float d = distanceCb();
+    float percent = -1.0f;
+    if (cfg->emptyDistanceCm != cfg->fullDistanceCm) {
+      float full  = cfg->fullDistanceCm;
+      float empty = cfg->emptyDistanceCm;
+      percent = (empty - d) / (empty - full) * 100.0f;
+      if (percent < 0)   percent = 0;
+      if (percent > 100) percent = 100;
+    }
+
+    char json[Limits::JSON_BUFFER_LENGTH];
+    snprintf(json, sizeof(json),
+      "{"
+        "\"distance\":%.2f,"
+        "\"percent\":%.1f,"
+        "\"full_cm\":%.2f,"
+        "\"empty_cm\":%.2f,"
+        "\"warn_cm\":%.2f,"
+        "\"bark_enabled\":%s,"
+        "\"language\":\"%s\","
+        "\"wifi_rssi\":%d,"
+        "\"uptime_ms\":%lu"
+      "}",
+      d,
+      percent,
+      cfg->fullDistanceCm,
+      cfg->emptyDistanceCm,
+      cfg->warnDistanceCm,
+      cfg->barkEnabled ? "true" : "false",
+      cfg->language == Language::FRENCH ? "fr" : "en",
+      WiFi.RSSI(),
+      millis()
+    );
+
+    server.send(200, "application/json", json);
+  }
+
+  static void handleApiConfig() {
+    if (!cfg) {
+      server.send(500, "application/json", "{\"error\":\"no_config\"}");
+      return;
+    }
+
+    if (server.method() == HTTP_GET) {
+      // GET /api/config - return current config
+      char json[Limits::JSON_BUFFER_LENGTH];
       snprintf(json, sizeof(json),
         "{"
-          "\"distance\":%.2f,"
-          "\"percent\":%.1f,"
-          "\"full_cm\":%.2f,"
-          "\"empty_cm\":%.2f,"
-          "\"warn_cm\":%.2f,"
-          "\"bark_enabled\":%s,"
-          "\"language\":%u"
+        "\"full_cm\":%.2f,"
+        "\"empty_cm\":%.2f,"
+        "\"warn_cm\":%.2f,"
+        "\"bark_enabled\":%s,"
+        "\"language\":\"%s\""
         "}",
-        d,
-        percent,
         cfg->fullDistanceCm,
         cfg->emptyDistanceCm,
         cfg->warnDistanceCm,
         cfg->barkEnabled ? "true" : "false",
-        (unsigned)cfg->language
+        cfg->language == Language::FRENCH ? "fr" : "en"
       );
-
       server.send(200, "application/json", json);
-    });
+    } else {
+      server.send(405, "text/plain", "Method not allowed");
+    }
+  }
 
-    // OTA update
-    server.on("/update", HTTP_POST, []() {
+  static void handleUpdate() {
+    // Check if authentication failed during upload
+    if (otaAuthFailed) {
       server.sendHeader("Connection", "close");
-      server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+      server.send(401, "text/plain", "Unauthorized: Invalid password");
+      otaAuthFailed = false;  // Reset flag
+      Logger::warn("OTA update rejected: invalid password");
+      return;
+    }
+    
+    if (!Update.hasError()) {
+      // Send success response
+      server.sendHeader("Connection", "close");
+      server.send(200, "text/plain", "OK");
+      server.client().flush();  // Ensure response is sent
+      
+      Logger::info("OTA update completed, rebooting in 2 seconds...");
+      delay(2000);  // Give time for response to reach browser
       ESP.restart();
-    }, []() {
-      HTTPUpload& upload = server.upload();
-      if (upload.status == UPLOAD_FILE_START) {
-        Serial.printf("Update: %s\n", upload.filename.c_str());
-        if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+    } else {
+      // Send failure response
+      server.sendHeader("Connection", "close");
+      server.send(500, "text/plain", "FAIL");
+      Logger::error("OTA update failed");
+    }
+  }
+
+  static void handleUpdateUpload() {
+    HTTPUpload& upload = server.upload();
+    
+    if (upload.status == UPLOAD_FILE_START) {
+      // Reset auth flag at start
+      otaAuthFailed = false;
+      
+      // Authenticate with password
+      if (!server.authenticate("admin", cfg->otaPassword)) {
+        Logger::warn("OTA authentication failed - invalid password");
+        otaAuthFailed = true;  // Set flag for handleUpdate
+        Update.abort();  // Abort any pending update
+        return;
+      }
+      
+      Logger::infof("OTA Update started: %s", upload.filename.c_str());
+      
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+        Logger::error("OTA begin failed");
+      }
+    } 
+    else if (upload.status == UPLOAD_FILE_WRITE) {
+      // Only write if authentication passed
+      if (!otaAuthFailed && Update.isRunning()) {
+        size_t written = Update.write(upload.buf, upload.currentSize);
+        if (written != upload.currentSize) {
           Update.printError(Serial);
-        }
-      } else if (upload.status == UPLOAD_FILE_WRITE) {
-        if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-          Update.printError(Serial);
-        }
-      } else if (upload.status == UPLOAD_FILE_END) {
-        if (Update.end(true)) {
-          Serial.printf("Update Success: %u bytes\nRebooting...\n", upload.totalSize);
-        } else {
-          Update.printError(Serial);
+          Logger::errorf("OTA write failed: expected %u, wrote %u", 
+                        upload.currentSize, written);
         }
       }
+    } 
+    else if (upload.status == UPLOAD_FILE_END) {
+      if (!otaAuthFailed && Update.isRunning()) {
+        if (Update.end(true)) {
+          Logger::infof("OTA Update Success: %u bytes", upload.totalSize);
+        } else {
+          Update.printError(Serial);
+          Logger::error("OTA end failed");
+        }
+      }
+    }
+    else if (upload.status == UPLOAD_FILE_ABORTED) {
+      Update.end();
+      Logger::warn("OTA Update aborted");
+    }
+  }
+
+  // Continued in Part 3...
+  // -------------------------------------------------------------------------
+  // Public methods
+  // -------------------------------------------------------------------------
+  void OTA::setDistanceCallback(DistanceCallback cb) {
+    distanceCb = cb;
+    Logger::debug("Distance callback registered");
+  }
+
+  void OTA::setPublishCallback(PublishCallback cb) {
+    publishCb = cb;
+    Logger::debug("Publish callback registered");
+  }
+
+  void OTA::setConfig(Config* c) {
+    cfg = c;
+    Logger::debug("Config pointer registered");
+  }
+
+  void OTA::setup() {
+    Logger::info("Initializing OTA system...");
+    
+    // Load persisted config (overriding defaults from main)
+    loadConfigFromNvs();
+
+    // Start mDNS
+    if (!MDNS.begin("saltlevel-esp32")) {
+      Logger::error("mDNS startup failed");
+    } else {
+      Logger::info("mDNS responder started: http://saltlevel-esp32.local/");
+      MDNS.addService("http", "tcp", 80);
+    }
+
+    // Register routes
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/config", HTTP_POST, handleConfig);
+    server.on("/measure", HTTP_GET, handleMeasure);
+    server.on("/api/status", HTTP_GET, handleApiStatus);
+    server.on("/api/config", HTTP_GET, handleApiConfig);
+    server.on("/update", HTTP_POST, handleUpdate, handleUpdateUpload);
+    
+    // Version check endpoint
+    server.on("/version", HTTP_GET, []() {
+      String buildTime = String(__DATE__) + " " + String(__TIME__);
+      String json = "{\"version\":\"2.0.3\",\"build\":\"" + buildTime + "\",\"uptime\":" + String(millis()) + "}";
+      server.send(200, "application/json", json);
+    });
+    
+    // Debug endpoint - shows what HTML is actually in PROGMEM
+    server.on("/debug/html", HTTP_GET, []() {
+      String page = String(serverIndex);
+      server.send(200, "text/plain", page);
+    });
+
+    // 404 handler
+    server.onNotFound([]() {
+      Logger::warnf("404 Not Found: %s", server.uri().c_str());
+      server.send(404, "text/plain", "Not found");
     });
 
     server.begin();
-    Serial.println("HTTP OTA server started");
+    Logger::infof("HTTP server started on port %d", Network::HTTP_PORT);
+    Logger::info("OTA system ready");
   }
 
   void OTA::loop() {
     server.handleClient();
-    delay(1);
+    // Note: MDNS.update() not needed for ESP32 (only for ESP8266)
   }
 
 } // namespace saltlevel
