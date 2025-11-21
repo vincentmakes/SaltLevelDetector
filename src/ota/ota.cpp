@@ -14,7 +14,7 @@
 namespace saltlevel {
 
   // -------------------------------------------------------------------------
-  // HTML UI - Responsive, bilingual (Tank → Settings → OTA)
+  // HTML UI - Responsive, bilingual (Tank â†’ Settings â†’ OTA)
   // -------------------------------------------------------------------------
   static const char serverIndex[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -233,7 +233,7 @@ namespace saltlevel {
 </head>
 <body>
   <div class="container">
-    <h1>{{STR_H1}} <small style="font-size:0.5em;color:#999;">v2.0.3</small></h1>
+    <h1>{{STR_H1}} <small style="font-size:0.5em;color:#999;">v2.1.0</small></h1>
 
     <div class="status-row">
       <div class="chip chip-online">
@@ -296,7 +296,7 @@ namespace saltlevel {
           {{STR_LANG}}
           <select name="lang">
             <option value="en" {{LANG_EN_SELECTED}}>English</option>
-            <option value="fr" {{LANG_FR_SELECTED}}>Français</option>
+            <option value="fr" {{LANG_FR_SELECTED}}>FranÃ§ais</option>
           </select>
         </label>
         <input type="submit" value="{{STR_SAVE}}">
@@ -416,7 +416,7 @@ namespace saltlevel {
     });
   </script>
   <div style="text-align:center; margin-top:24px; padding:16px; color:#999; font-size:0.8em;">
-    Firmware v2.0.3 | Build: {{BUILD_TIME}}
+    Firmware v2.1.0 | Build: {{BUILD_TIME}}
   </div>
 </body>
 </html>
@@ -431,6 +431,35 @@ namespace saltlevel {
   static Config*          cfg        = nullptr;
   static Preferences      prefs;
   static bool             otaAuthFailed = false;  // Track auth failure
+  
+  // -------------------------------------------------------------------------
+  // Uptime Helper (overflow-safe)
+  // -------------------------------------------------------------------------
+  static String getUptimeString() {
+    unsigned long ms = millis();
+    unsigned long seconds = ms / 1000;
+    unsigned long minutes = seconds / 60;
+    unsigned long hours = minutes / 60;
+    unsigned long days = hours / 24;
+    
+    hours %= 24;
+    minutes %= 60;
+    seconds %= 60;
+    
+    char buffer[64];
+    if (days > 0) {
+      snprintf(buffer, sizeof(buffer), "%lud %02lu:%02lu:%02lu", 
+               days, hours, minutes, seconds);
+    } else {
+      snprintf(buffer, sizeof(buffer), "%02lu:%02lu:%02lu", 
+               hours, minutes, seconds);
+    }
+    return String(buffer);
+  }
+  
+  static unsigned long getUptimeSeconds() {
+    return millis() / 1000;
+  }
 
   // -------------------------------------------------------------------------
   // Config persistence
@@ -497,16 +526,16 @@ namespace saltlevel {
       // French
       page.replace("{{STR_TITLE}}",       "Surveillance du niveau de sel");
       page.replace("{{STR_H1}}",          "Surveillance du niveau de sel");
-      page.replace("{{STR_OTA}}",         "Mise à jour OTA");
-      page.replace("{{STR_SETTINGS}}",    "Réglages du réservoir et de Bark");
+      page.replace("{{STR_OTA}}",         "Mise Ã  jour OTA");
+      page.replace("{{STR_SETTINGS}}",    "RÃ©glages du rÃ©servoir et de Bark");
       page.replace("{{STR_LANG}}",        "Langue de l&#39;interface :");
-      page.replace("{{STR_FULL}}",        "Distance minimale lorsque le réservoir est PLEIN (limite matérielle, cm) :");
-      page.replace("{{STR_EMPTY}}",       "Distance lorsque le réservoir est VIDE (profondeur max, cm) :");
+      page.replace("{{STR_FULL}}",        "Distance minimale lorsque le rÃ©servoir est PLEIN (limite matÃ©rielle, cm) :");
+      page.replace("{{STR_EMPTY}}",       "Distance lorsque le rÃ©servoir est VIDE (profondeur max, cm) :");
       page.replace("{{STR_WARN}}",        "Distance d&#39;avertissement Bark (cm) :");
-      page.replace("{{STR_BARK_KEY}}",    "Clé Bark :");
+      page.replace("{{STR_BARK_KEY}}",    "ClÃ© Bark :");
       page.replace("{{STR_BARK_ENABLE}}", "Activer les notifications Bark");
       page.replace("{{STR_OTA_PASSWORD}}", "Mot de passe OTA :");
-      page.replace("{{STR_SAVE}}",        "Enregistrer les réglages");
+      page.replace("{{STR_SAVE}}",        "Enregistrer les rÃ©glages");
       page.replace("{{STR_CURRENT}}",     "Niveau actuel");
       page.replace("{{STR_MEASURE}}",     "Mesurer maintenant");
       page.replace("{{STR_DISTANCE}}",    "Distance :");
@@ -725,7 +754,8 @@ namespace saltlevel {
         "\"bark_enabled\":%s,"
         "\"language\":\"%s\","
         "\"wifi_rssi\":%d,"
-        "\"uptime_ms\":%lu"
+        "\"uptime_seconds\":%lu,"
+        "\"uptime\":\"%s\""
       "}",
       d,
       percent,
@@ -735,7 +765,8 @@ namespace saltlevel {
       cfg->barkEnabled ? "true" : "false",
       cfg->language == Language::FRENCH ? "fr" : "en",
       WiFi.RSSI(),
-      millis()
+      getUptimeSeconds(),
+      getUptimeString().c_str()
     );
 
     server.send(200, "application/json", json);
@@ -890,7 +921,18 @@ namespace saltlevel {
     // Version check endpoint
     server.on("/version", HTTP_GET, []() {
       String buildTime = String(__DATE__) + " " + String(__TIME__);
-      String json = "{\"version\":\"2.0.3\",\"build\":\"" + buildTime + "\",\"uptime\":" + String(millis()) + "}";
+      char json[256];
+      snprintf(json, sizeof(json),
+        "{"
+          "\"version\":\"2.1.0\","
+          "\"build\":\"%s\","
+          "\"uptime_seconds\":%lu,"
+          "\"uptime\":\"%s\""
+        "}",
+        buildTime.c_str(),
+        getUptimeSeconds(),
+        getUptimeString().c_str()
+      );
       server.send(200, "application/json", json);
     });
     

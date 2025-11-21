@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <algorithm>
+#include <Preferences.h>
 #include "esp_task_wdt.h"
 #include "secrets.h"
 #include "constants.h"
@@ -20,6 +21,63 @@ saltlevel::OTA    ota;
 bool warningSent = false;
 unsigned long lastMeasure = 0;
 unsigned long lastWifiCheck = 0;
+
+// Reset button state
+unsigned long resetButtonPressStart = 0;
+bool resetButtonPressed = false;
+bool resetInProgress = false;
+
+// ---------------------------------------------------------------------------
+// Reset Button Handler
+// ---------------------------------------------------------------------------
+void checkResetButton() {
+    int buttonState = digitalRead(Pins::RESET_BTN);
+    
+    // Button is pressed (LOW on ESP32 boot button)
+    if (buttonState == LOW) {
+        if (!resetButtonPressed) {
+            // Button just pressed
+            resetButtonPressed = true;
+            resetButtonPressStart = millis();
+            Logger::info("Reset button pressed - hold for 5 seconds to clear settings");
+        } else {
+            // Button held down - check duration
+            unsigned long holdDuration = millis() - resetButtonPressStart;
+            
+            if (holdDuration >= Timing::RESET_BUTTON_HOLD_MS && !resetInProgress) {
+                resetInProgress = true;
+                Logger::warn("===========================================");
+                Logger::warn("RESET BUTTON HELD - CLEARING ALL SETTINGS");
+                Logger::warn("===========================================");
+                
+                // Clear WiFi credentials
+                clearWiFiCredentials();
+                Logger::info("WiFi credentials cleared");
+                
+                // Clear application settings
+                Preferences prefs;
+                prefs.begin("saltcfg", false);
+                prefs.clear();
+                prefs.end();
+                Logger::info("Application settings cleared");
+                
+                Logger::warn("All settings cleared. Device will restart in 2 seconds...");
+                delay(2000);
+                ESP.restart();
+            }
+        }
+    } else {
+        // Button released
+        if (resetButtonPressed) {
+            unsigned long holdDuration = millis() - resetButtonPressStart;
+            if (holdDuration < Timing::RESET_BUTTON_HOLD_MS) {
+                Logger::debug("Reset button released (not held long enough)");
+            }
+            resetButtonPressed = false;
+            resetInProgress = false;
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Distance measurement with median filtering
@@ -138,8 +196,9 @@ void setup() {
     
     Logger::info("===========================================");
     Logger::info("Salt Level Monitor");
-    Logger::info("Version: 2.0 (Enhanced)");
+    Logger::info("Version: 2.1.0 (WiFi Provisioning)");
     Logger::info("Features: WiFi + MQTT + Bark + OTA");
+    Logger::info("Reset: Hold BOOT button for 5s to clear");
     Logger::info("===========================================");
     
     // Initialize watchdog
@@ -150,6 +209,7 @@ void setup() {
     // Initialize hardware pins
     pinMode(Pins::TRIG, OUTPUT);
     pinMode(Pins::ECHO, INPUT);
+    pinMode(Pins::RESET_BTN, INPUT_PULLUP);  // Use internal pull-up
     Logger::info("GPIO pins configured");
     
     // Set default configuration
@@ -184,8 +244,14 @@ void setup() {
     
     Logger::infof("Bark notifications: %s", gConfig.barkEnabled ? "ENABLED" : "DISABLED");
     
-    // Connect to WiFi
-    connectWiFi();
+    // Initialize WiFi (with provisioning if needed)
+    if (!initWiFi()) {
+        // Device will restart after provisioning
+        Logger::info("Waiting for WiFi provisioning...");
+        while (true) {
+            delay(1000);
+        }
+    }
     
     // Initialize OTA (will load config from NVS, overriding defaults)
     ota.setConfig(&gConfig);
@@ -221,7 +287,13 @@ void loop() {
     // Reset watchdog timer
     esp_task_wdt_reset();
     
+    // Check reset button (hold for 5 seconds to clear all settings)
+    checkResetButton();
+    
     // Periodic WiFi check
+    // NOTE: This timing pattern is overflow-safe. When millis() overflows after
+    // ~49 days, unsigned arithmetic wraps correctly: if now=10 and last=4294967290,
+    // then (now - last) = (10 - 4294967290) = 4294967296 = wraps to correct value
     unsigned long now = millis();
     if (now - lastWifiCheck >= Timing::WIFI_CHECK_INTERVAL_MS) {
         lastWifiCheck = now;
