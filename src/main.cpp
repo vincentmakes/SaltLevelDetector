@@ -129,7 +129,7 @@ float readDistanceCm() {
 }
 
 // ---------------------------------------------------------------------------
-// Fullness calculation
+// Level calculation
 // ---------------------------------------------------------------------------
 float computeFullPercent(float distanceCm) {
     if (gConfig.emptyDistanceCm == gConfig.fullDistanceCm) {
@@ -196,7 +196,7 @@ void setup() {
     
     Logger::info("===========================================");
     Logger::info("Salt Level Monitor");
-    Logger::info("Version: 2.1.0 (WiFi Provisioning)");
+    Logger::info("Version: 2.1.1 (WiFi Provisioning)");
     Logger::info("Features: WiFi + MQTT + Bark + OTA");
     Logger::info("Reset: Hold BOOT button for 5s to clear");
     Logger::info("===========================================");
@@ -318,7 +318,7 @@ void loop() {
             Logger::error("Measurement failed: out of range / no echo");
         } else {
             float percent = computeFullPercent(distance);
-            Logger::infof("Distance: %.2f cm, Fullness: %.1f%%", distance, percent);
+            Logger::infof("Distance: %.2f cm, Level: %.1f%%", distance, percent);
             
             // Handle Bark notifications
             handleBarkNotifications(distance, percent);

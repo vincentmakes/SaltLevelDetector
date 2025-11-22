@@ -8,13 +8,14 @@
 #include <Update.h>
 #include <Preferences.h>
 #include <math.h>
+#include "esp_task_wdt.h"
 #include "../constants.h"
 #include "../logger.h"
 
 namespace saltlevel {
 
   // -------------------------------------------------------------------------
-  // HTML UI - Responsive, bilingual (Tank â†’ Settings â†’ OTA)
+  // HTML UI - Responsive, bilingual (Tank Settings OTA)
   // -------------------------------------------------------------------------
   static const char serverIndex[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -233,7 +234,7 @@ namespace saltlevel {
 </head>
 <body>
   <div class="container">
-    <h1>{{STR_H1}} <small style="font-size:0.5em;color:#999;">v2.1.0</small></h1>
+    <h1>{{STR_H1}} <small style="font-size:0.5em;color:#999;">v2.1.1</small></h1>
 
     <div class="status-row">
       <div class="chip chip-online">
@@ -256,7 +257,7 @@ namespace saltlevel {
         <span class="value" id="distance_text">--</span>
       </div>
       <div class="row">
-        <span>{{STR_FULLNESS}}</span>
+        <span>{{STR_LEVEL}}</span>
         <span class="value" id="percent_text">--</span>
       </div>
 
@@ -296,7 +297,7 @@ namespace saltlevel {
           {{STR_LANG}}
           <select name="lang">
             <option value="en" {{LANG_EN_SELECTED}}>English</option>
-            <option value="fr" {{LANG_FR_SELECTED}}>FranÃ§ais</option>
+            <option value="fr" {{LANG_FR_SELECTED}}>Français</option>
           </select>
         </label>
         <input type="submit" value="{{STR_SAVE}}">
@@ -416,7 +417,7 @@ namespace saltlevel {
     });
   </script>
   <div style="text-align:center; margin-top:24px; padding:16px; color:#999; font-size:0.8em;">
-    Firmware v2.1.0 | Build: {{BUILD_TIME}}
+    Firmware v2.1.1 | Build: {{BUILD_TIME}}
   </div>
 </body>
 </html>
@@ -526,20 +527,20 @@ namespace saltlevel {
       // French
       page.replace("{{STR_TITLE}}",       "Surveillance du niveau de sel");
       page.replace("{{STR_H1}}",          "Surveillance du niveau de sel");
-      page.replace("{{STR_OTA}}",         "Mise Ã  jour OTA");
-      page.replace("{{STR_SETTINGS}}",    "RÃ©glages du rÃ©servoir et de Bark");
+      page.replace("{{STR_OTA}}",         "Mise à jour OTA");
+      page.replace("{{STR_SETTINGS}}",    "Réglages du réservoir et de Bark");
       page.replace("{{STR_LANG}}",        "Langue de l&#39;interface :");
-      page.replace("{{STR_FULL}}",        "Distance minimale lorsque le rÃ©servoir est PLEIN (limite matÃ©rielle, cm) :");
-      page.replace("{{STR_EMPTY}}",       "Distance lorsque le rÃ©servoir est VIDE (profondeur max, cm) :");
+      page.replace("{{STR_FULL}}",        "Distance minimale lorsque le réservoir est PLEIN (limite matérielle, cm) :");
+      page.replace("{{STR_EMPTY}}",       "Distance lorsque le réservoir est VIDE (profondeur max, cm) :");
       page.replace("{{STR_WARN}}",        "Distance d&#39;avertissement Bark (cm) :");
-      page.replace("{{STR_BARK_KEY}}",    "ClÃ© Bark :");
+      page.replace("{{STR_BARK_KEY}}",    "Clé Bark :");
       page.replace("{{STR_BARK_ENABLE}}", "Activer les notifications Bark");
       page.replace("{{STR_OTA_PASSWORD}}", "Mot de passe OTA :");
-      page.replace("{{STR_SAVE}}",        "Enregistrer les rÃ©glages");
+      page.replace("{{STR_SAVE}}",        "Enregistrer les réglages");
       page.replace("{{STR_CURRENT}}",     "Niveau actuel");
       page.replace("{{STR_MEASURE}}",     "Mesurer maintenant");
       page.replace("{{STR_DISTANCE}}",    "Distance :");
-      page.replace("{{STR_FULLNESS}}",    "Remplissage :");
+      page.replace("{{STR_LEVEL}}",    "Remplissage :");
     } else {
       // English
       page.replace("{{STR_TITLE}}",       "Salt Level Monitor");
@@ -557,7 +558,7 @@ namespace saltlevel {
       page.replace("{{STR_CURRENT}}",     "Current Level");
       page.replace("{{STR_MEASURE}}",     "Measure now");
       page.replace("{{STR_DISTANCE}}",    "Distance:");
-      page.replace("{{STR_FULLNESS}}",    "Fullness:");
+      page.replace("{{STR_LEVEL}}",    "Level:");
     }
 
     if (lang == Language::FRENCH) {
@@ -832,6 +833,7 @@ namespace saltlevel {
     HTTPUpload& upload = server.upload();
     
     if (upload.status == UPLOAD_FILE_START) {
+      esp_task_wdt_reset(); 
       // Reset auth flag at start
       otaAuthFailed = false;
       
@@ -851,6 +853,7 @@ namespace saltlevel {
       }
     } 
     else if (upload.status == UPLOAD_FILE_WRITE) {
+      esp_task_wdt_reset(); 
       // Only write if authentication passed
       if (!otaAuthFailed && Update.isRunning()) {
         size_t written = Update.write(upload.buf, upload.currentSize);
@@ -862,6 +865,7 @@ namespace saltlevel {
       }
     } 
     else if (upload.status == UPLOAD_FILE_END) {
+      esp_task_wdt_reset(); 
       if (!otaAuthFailed && Update.isRunning()) {
         if (Update.end(true)) {
           Logger::infof("OTA Update Success: %u bytes", upload.totalSize);
@@ -924,7 +928,7 @@ namespace saltlevel {
       char json[256];
       snprintf(json, sizeof(json),
         "{"
-          "\"version\":\"2.1.0\","
+          "\"version\":\"2.1.1\","
           "\"build\":\"%s\","
           "\"uptime_seconds\":%lu,"
           "\"uptime\":\"%s\""

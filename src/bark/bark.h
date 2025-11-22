@@ -8,7 +8,7 @@
  * 
  * @param barkKey Device key from the Bark app
  * @param distanceCm Current measured distance
- * @param percentFull Computed fullness (0-100), for message text
+ * @param percentFull Computed Level (0-100), for message text
  * @return true on HTTP 200, false otherwise
  */
 bool barkSendLowSaltNotification(const char* barkKey, float distanceCm, float percentFull);
