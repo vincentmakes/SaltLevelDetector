@@ -2,6 +2,11 @@
 
 The purpose of this project is to measure the height level of a salt tank for a water softener. It publishes the distance measured to Home Assistant where it can be converted in percentage and displayed as a lovelace card.
 
+For people not interested in using Home Assistant but want a standalone setup, one can setup a Bark key to receive a notification when the salt level goes below a threshold.
+Bark is an app which can be installed on any mobile device and is meant to receive notifications.
+
+A WebUI also displays the level directly.
+
 <img width="401" height="206" alt="Screenshot 2025-11-17 at 13 44 14" src="https://github.com/user-attachments/assets/ab8d5b6f-2bfb-4ff2-a8ed-297f53e26a01" />
 
 # Hardware requirements
