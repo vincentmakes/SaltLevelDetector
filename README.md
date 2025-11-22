@@ -26,15 +26,17 @@ In my case, I've used an insert in the plastic of my tank in order to screw a 3d
 
 <img width="401" src="https://github.com/user-attachments/assets/344e1578-9f06-4906-b04f-ab54837d772d" />
 
-# Software
 
-Rename secrets_template.h into secrets.h and enter your credentials : Wifi + MQTT settings + Bark settings (optional)
+
+# Software
+## Quick Start
+Rename secrets_template.h into secrets.h and enter your credentials : Wifi + MQTT settings + Bark settings.
 
 MQTT is used if you want to integrate with Home Assistant and display the salt level in a lovelace card.  
 
 If you don't have Home Assistant and prefer to keep things simple but still want to receive a notification when the salt level is low, simply install Bark on your mobile and get the API key from there. Define your minimum level in centimeters from the top of the sensor (45cm by default). Bark will send the notification only once and will only reset once the tank is 3cm above the threshold again.
 
-You can change the frequency of the measurement: by default it is set at the beginning of main.cpp at 1hr.  
+You can change the frequency of the measurement: by default it is set in constant.h at 1hr.  
 
 Compile the code and upload it to the esp32: 
 
@@ -45,6 +47,7 @@ pio run -t upload -e esp32
 pio device monitor -b 115200
 ```
 
+## Home Assistant Setup (Optional, requires MQTT)
 Use the Yaml files in docs folder for the Home Assistant setup: salt_level.yaml needs to be in a folder loaded by the configuration
 The yaml in configuration.yaml needs to be copied in the section template of your existing setup.  You will need to adjust the max depth to your tanks dimensions.
 
@@ -61,10 +64,13 @@ severity:
   yellow: 35
   red: 0
 ```
-# Advanced Features
+## Settings in the WebUI
 
-Browsing to the IP address of the ESP32, you will find a webpage to display the status of the salt level, as well as adjust the settings (retained at reboot). The language of the webpage can be switched to french.  
-The intent behind this was to make it accessible for people without a Home Assistant setup and needed some autonomy in adjustment of the settings without having to recompile the firmware.  
+Browsing to the IP address of the ESP32 or to http://saltlevel-esp32.local/ you will find a webpage to display the status of the salt level, as well as adjust the settings (retained at reboot). The language of the webpage can be switched to french.
+
+The intent behind this was to make it accessible for people without a Home Assistant setup and needed some autonomy in adjustment of the settings without having to recompile the firmware.
+
+
 
 <img width="462"  src="https://github.com/user-attachments/assets/bed83605-f0dd-4e5d-b5df-9785d36035b2" /> <br/>
 <img width="462"   src="https://github.com/user-attachments/assets/6025a7d5-7c94-4358-bde8-003e0832056f" />
