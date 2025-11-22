@@ -17,7 +17,7 @@ A waterproof ultrasonic sensor with its board: JSN-SR04T
 
 <img width="400" alt="image" src="https://github.com/user-attachments/assets/5509a7c9-63c7-4969-96d0-f5b378bb670f" />  
 
-Some people have tried with other ultrasonic sensor which ended up being corroded quickly due to the salt environment.
+Some people have tried with other ultrasonic sensor which ended up being corroded quickly due to the salty environment.
 
 The board needs to be wired to the ESP32 as such:
 
@@ -27,7 +27,7 @@ JSN-SR04T Trig → ESP32 GPIO5
 JSN-SR04T Echo → ESP32 GPIO18   
 
 Any support to hold the sensor - note the board + ESP32 should not be put inside the tanks otherwise they will get damaged with the salt.  
-In my case, I've used an insert in the plastic of my tank in order to screw a 3d printed holder for the sensor, in a way which set it in the middle. 
+In my case, I've used an insert in the plastic of my tank in order to screw a 3d printed holder for the sensor, in a way which set it in the middle. A piece of wood with a hole, secured on the tank would also work fine.
 
 <img width="401" src="https://github.com/user-attachments/assets/344e1578-9f06-4906-b04f-ab54837d772d" />
 
