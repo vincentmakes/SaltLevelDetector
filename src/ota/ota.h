@@ -18,8 +18,10 @@ namespace saltlevel {
     float    warnDistanceCm;      // Bark warning distance
     char     barkKey[128];        // Bark device key
     char     otaPassword[64];     // OTA update password
+    char     ntfyTopic[64];       // ntfy topic name
     Language language;            // UI language
     bool     barkEnabled;         // Runtime Bark on/off
+    bool     ntfyEnabled;         // Runtime ntfy on/off
   };
 
   // Callback types

@@ -10,6 +10,7 @@
 #include "wifi/wifi.h"
 #include "mqtt/mqtt.h"
 #include "bark/bark.h"
+#include "ntfy/ntfy.h"
 #include "ota/ota.h"
 
 // ---------------------------------------------------------------------------
@@ -150,27 +151,39 @@ float computeFullPercent(float distanceCm) {
 }
 
 // ---------------------------------------------------------------------------
-// Bark notification logic
+// Notification logic (both Bark and ntfy)
 // ---------------------------------------------------------------------------
-void handleBarkNotifications(float distance, float percent) {
-    if (!gConfig.barkEnabled) {
-        return;
-    }
-    
+void handleNotifications(float distance, float percent) {
     if (distance < 0 || gConfig.warnDistanceCm <= 0 || percent < 0.0f) {
         return;
     }
     
     // Check if we should send a warning
     if (!warningSent && distance >= gConfig.warnDistanceCm) {
-        Logger::infof("Threshold reached (%.1f >= %.1f), sending Bark notification...",
+        Logger::infof("Threshold reached (%.1f >= %.1f), sending notifications...",
                      distance, gConfig.warnDistanceCm);
         
-        if (barkSendLowSaltNotification(gConfig.barkKey, distance, percent)) {
+        // Try Bark (iOS)
+        if (gConfig.barkEnabled && gConfig.barkKey[0] != '\0') {
+            if (barkSendLowSaltNotification(gConfig.barkKey, distance, percent)) {
+                Logger::info("Bark notification sent successfully");
+            } else {
+                Logger::error("Bark notification failed");
+            }
+        }
+        
+        // Try ntfy (Android/Multi-platform)
+        if (gConfig.ntfyEnabled && gConfig.ntfyTopic[0] != '\0') {
+            if (ntfySendLowSaltNotification(gConfig.ntfyTopic, distance, percent)) {
+                Logger::info("ntfy notification sent successfully");
+            } else {
+                Logger::error("ntfy notification failed");
+            }
+        }
+        
+        // Set warning flag if any notification was enabled
+        if (gConfig.barkEnabled || gConfig.ntfyEnabled) {
             warningSent = true;
-            Logger::info("Bark notification sent successfully");
-        } else {
-            Logger::error("Bark notification failed");
         }
     }
     // Check if level has recovered (with hysteresis)
@@ -196,8 +209,8 @@ void setup() {
     
     Logger::info("===========================================");
     Logger::info("Salt Level Monitor");
-    Logger::info("Version: 2.1.1 (WiFi Provisioning)");
-    Logger::info("Features: WiFi + MQTT + Bark + OTA");
+    Logger::info("Version: 2.2.0 (WiFi + ntfy)");
+    Logger::info("Features: WiFi + MQTT + Bark + ntfy + OTA");
     Logger::info("Reset: Hold BOOT button for 5s to clear");
     Logger::info("===========================================");
     
@@ -242,6 +255,10 @@ void setup() {
     gConfig.barkEnabled = false;
 #endif
     
+    // Initialize ntfy topic (will be loaded from NVS if exists)
+    gConfig.ntfyTopic[0] = '\0';
+    gConfig.ntfyEnabled = false;
+    
     Logger::infof("Bark notifications: %s", gConfig.barkEnabled ? "ENABLED" : "DISABLED");
     
     // Initialize WiFi (with provisioning if needed)
@@ -258,6 +275,11 @@ void setup() {
     ota.setDistanceCallback(readDistanceCm);
     ota.setPublishCallback(mqttPublishDistance);
     ota.setup();
+    
+    
+    Logger::infof("ntfy notifications: %s (topic: %s)", 
+                 gConfig.ntfyEnabled ? "ENABLED" : "DISABLED",
+                 gConfig.ntfyTopic);
     
     Logger::infof("Configuration loaded - Tank: %.1f-%.1f cm, Warn: %.1f cm",
                  gConfig.fullDistanceCm, gConfig.emptyDistanceCm, gConfig.warnDistanceCm);
@@ -320,8 +342,8 @@ void loop() {
             float percent = computeFullPercent(distance);
             Logger::infof("Distance: %.2f cm, Level: %.1f%%", distance, percent);
             
-            // Handle Bark notifications
-            handleBarkNotifications(distance, percent);
+            // Handle notifications (Bark and ntfy)
+            handleNotifications(distance, percent);
         }
         
         // Publish to MQTT

@@ -44,6 +44,7 @@ namespace Network {
 namespace Limits {
     constexpr size_t BARK_KEY_LENGTH = 128;
     constexpr size_t OTA_PASSWORD_LENGTH = 64;
+    constexpr size_t NTFY_TOPIC_LENGTH = 64;
     constexpr size_t TOPIC_BUFFER_LENGTH = 128;
     constexpr size_t JSON_BUFFER_LENGTH = 512;
     constexpr size_t WIFI_SSID_LENGTH = 32;
