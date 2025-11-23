@@ -45,7 +45,10 @@ If you don't have Home Assistant and prefer to keep things simple but still want
 
 You can change the frequency of the measurement: by default it is set in constant.h at 1hr.  
 
-Compile the code and upload it to the esp32: 
+We're using PlatformIO as the IDE and you will find here the instructions to install it together with VSCode in order to compile it and flash the esp32: https://randomnerdtutorials.com/vs-code-platformio-ide-esp32-esp8266-arduino/
+
+
+Compile the code and upload it to the esp32:
 
 ``` shell
 pio run -t clean
