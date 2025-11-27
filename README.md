@@ -1,5 +1,5 @@
 # Introduction
-
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/vincentvt)  
 The purpose of this project is to measure the height level of a salt tank for a water softener. It publishes the distance measured to Home Assistant where it can be converted in percentage and displayed as a lovelace card.
 
 For people not interested in using Home Assistant but want a standalone setup, one can setup a Bark key to receive a notification when the salt level goes below a threshold.
