@@ -1,5 +1,5 @@
 # Introduction
-
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/vincentmakes)  
 The purpose of this project is to measure the height level of a salt tank for a water softener. It publishes the distance measured to Home Assistant where it can be converted in percentage and displayed as a lovelace card.
 
 For people not interested in using Home Assistant but want a standalone setup, one can setup a Bark key to receive a notification when the salt level goes below a threshold.
@@ -45,7 +45,10 @@ If you don't have Home Assistant and prefer to keep things simple but still want
 
 You can change the frequency of the measurement: by default it is set in constant.h at 1hr.  
 
-Compile the code and upload it to the esp32: 
+We're using PlatformIO as the IDE and you will find here the instructions to install it together with VSCode in order to compile it and flash the esp32: https://randomnerdtutorials.com/vs-code-platformio-ide-esp32-esp8266-arduino/
+
+
+Compile the code and upload it to the esp32:
 
 ``` shell
 pio run -t clean
