@@ -51,4 +51,9 @@ namespace Limits {
     constexpr size_t WIFI_PASSWORD_LENGTH = 64;
 }
 
+// Notification configuration
+namespace Notification {
+    constexpr uint8_t CONSECUTIVE_LOW_THRESHOLD = 8;   // Hours of low level before alert
+}
+
 #endif // CONSTANTS_H

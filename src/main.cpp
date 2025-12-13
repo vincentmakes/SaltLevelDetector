@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <Preferences.h>
 #include "esp_task_wdt.h"
-#include "secrets.h"
+#include "secrets.h_tmp"
 #include "constants.h"
 #include "logger.h"
 
@@ -23,10 +23,43 @@ bool warningSent = false;
 unsigned long lastMeasure = 0;
 unsigned long lastWifiCheck = 0;
 
+// Consecutive low-level tracking for notification filtering
+uint8_t consecutiveLowReadings = 0;
+uint8_t consecutiveHighReadings = 0;  // For reset after recovery
+
 // Reset button state
 unsigned long resetButtonPressStart = 0;
 bool resetButtonPressed = false;
 bool resetInProgress = false;
+
+// ---------------------------------------------------------------------------
+// Persistence for notification state (survives reboot)
+// ---------------------------------------------------------------------------
+static Preferences notificationPrefs;
+
+void loadNotificationState() {
+    notificationPrefs.begin("notify", true);  // Read-only
+    consecutiveLowReadings = notificationPrefs.getUChar("consec_low", 0);
+    consecutiveHighReadings = notificationPrefs.getUChar("consec_high", 0);
+    warningSent = notificationPrefs.getBool("warn_sent", false);
+    notificationPrefs.end();
+    
+    Logger::infof("Notification state loaded: low=%u, high=%u, warningSent=%s",
+                 consecutiveLowReadings, consecutiveHighReadings,
+                 warningSent ? "true" : "false");
+}
+
+void saveNotificationState() {
+    notificationPrefs.begin("notify", false);  // Read-write
+    notificationPrefs.putUChar("consec_low", consecutiveLowReadings);
+    notificationPrefs.putUChar("consec_high", consecutiveHighReadings);
+    notificationPrefs.putBool("warn_sent", warningSent);
+    notificationPrefs.end();
+    
+    Logger::debugf("Notification state saved: low=%u, high=%u, warningSent=%s",
+                  consecutiveLowReadings, consecutiveHighReadings,
+                  warningSent ? "true" : "false");
+}
 
 // ---------------------------------------------------------------------------
 // Reset Button Handler
@@ -61,6 +94,12 @@ void checkResetButton() {
                 prefs.clear();
                 prefs.end();
                 Logger::info("Application settings cleared");
+                
+                // Clear notification state
+                notificationPrefs.begin("notify", false);
+                notificationPrefs.clear();
+                notificationPrefs.end();
+                Logger::info("Notification state cleared");
                 
                 Logger::warn("All settings cleared. Device will restart in 2 seconds...");
                 delay(2000);
@@ -151,47 +190,103 @@ float computeFullPercent(float distanceCm) {
 }
 
 // ---------------------------------------------------------------------------
-// Notification logic (both Bark and ntfy)
+// Notification logic (both Bark and ntfy) with consecutive hours filter
+// 
+// Distance interpretation:
+//   - Higher distance = less salt = LOW level = needs refill
+//   - Lower distance = more salt = OK level = tank refilled
+//
+// Notification sent after N consecutive hours with distance >= threshold (low salt)
+// Notification reset after N consecutive hours with distance < threshold (refilled)
 // ---------------------------------------------------------------------------
 void handleNotifications(float distance, float percent) {
     if (distance < 0 || gConfig.warnDistanceCm <= 0 || percent < 0.0f) {
         return;
     }
     
-    // Check if we should send a warning
-    if (!warningSent && distance >= gConfig.warnDistanceCm) {
-        Logger::infof("Threshold reached (%.1f >= %.1f), sending notifications...",
-                     distance, gConfig.warnDistanceCm);
-        
-        // Try Bark (iOS)
-        if (gConfig.barkEnabled && gConfig.barkKey[0] != '\0') {
-            if (barkSendLowSaltNotification(gConfig.barkKey, distance, percent)) {
-                Logger::info("Bark notification sent successfully");
-            } else {
-                Logger::error("Bark notification failed");
-            }
+    // Check if salt level is low (distance >= threshold means less salt)
+    bool isLowLevel = (distance >= gConfig.warnDistanceCm);
+    
+    if (isLowLevel) {
+        // Reset high counter when level is low
+        if (consecutiveHighReadings > 0) {
+            Logger::debugf("Level dropped again, resetting high counter from %u to 0",
+                          consecutiveHighReadings);
+            consecutiveHighReadings = 0;
         }
         
-        // Try ntfy (Android/Multi-platform)
-        if (gConfig.ntfyEnabled && gConfig.ntfyTopic[0] != '\0') {
-            if (ntfySendLowSaltNotification(gConfig.ntfyTopic, distance, percent)) {
-                Logger::info("ntfy notification sent successfully");
-            } else {
-                Logger::error("ntfy notification failed");
-            }
+        // Increment consecutive low readings counter
+        if (consecutiveLowReadings < 255) {
+            consecutiveLowReadings++;
         }
         
-        // Set warning flag if any notification was enabled
-        if (gConfig.barkEnabled || gConfig.ntfyEnabled) {
-            warningSent = true;
+        Logger::infof("Low level detected (%.1f cm >= %.1f cm). Consecutive low: %u/%u",
+                     distance, gConfig.warnDistanceCm,
+                     consecutiveLowReadings, gConfig.consecutiveHoursThreshold);
+        
+        // Check if we should send a warning (consecutive hours threshold met)
+        if (!warningSent && consecutiveLowReadings >= gConfig.consecutiveHoursThreshold) {
+            Logger::infof("Threshold met for %u consecutive hours, sending notifications...",
+                         consecutiveLowReadings);
+            
+            // Try Bark (iOS)
+            if (gConfig.barkEnabled && gConfig.barkKey[0] != '\0') {
+                if (barkSendLowSaltNotification(gConfig.barkKey, distance, percent)) {
+                    Logger::info("Bark notification sent successfully");
+                } else {
+                    Logger::error("Bark notification failed");
+                }
+            }
+            
+            // Try ntfy (Android/Multi-platform)
+            if (gConfig.ntfyEnabled && gConfig.ntfyTopic[0] != '\0') {
+                if (ntfySendLowSaltNotification(gConfig.ntfyTopic, distance, percent)) {
+                    Logger::info("ntfy notification sent successfully");
+                } else {
+                    Logger::error("ntfy notification failed");
+                }
+            }
+            
+            // Set warning flag if any notification was enabled
+            if (gConfig.barkEnabled || gConfig.ntfyEnabled) {
+                warningSent = true;
+            }
+        } else if (!warningSent) {
+            Logger::infof("Waiting for %u more consecutive low readings before notification",
+                         gConfig.consecutiveHoursThreshold - consecutiveLowReadings);
+        }
+    } else {
+        // Salt level is OK (distance < threshold means tank was refilled)
+        
+        // Reset low counter when salt level is OK
+        if (consecutiveLowReadings > 0) {
+            Logger::debugf("Salt refilled, resetting low counter from %u to 0",
+                          consecutiveLowReadings);
+            consecutiveLowReadings = 0;
+        }
+        
+        // Increment consecutive OK readings counter
+        if (consecutiveHighReadings < 255) {
+            consecutiveHighReadings++;
+        }
+        
+        Logger::infof("Salt OK (%.1f cm < %.1f cm threshold). Consecutive OK: %u/%u",
+                     distance, gConfig.warnDistanceCm,
+                     consecutiveHighReadings, gConfig.consecutiveHoursThreshold);
+        
+        // Reset warning only after N consecutive hours with OK level
+        if (warningSent && consecutiveHighReadings >= gConfig.consecutiveHoursThreshold) {
+            warningSent = false;
+            Logger::infof("Salt OK for %u consecutive hours, warning reset - ready for new alerts",
+                         consecutiveHighReadings);
+        } else if (warningSent) {
+            Logger::infof("Waiting for %u more consecutive OK readings before reset",
+                         gConfig.consecutiveHoursThreshold - consecutiveHighReadings);
         }
     }
-    // Check if level has recovered (with hysteresis)
-    else if (warningSent && distance <= (gConfig.warnDistanceCm - Sensor::HYSTERESIS_CM)) {
-        warningSent = false;
-        Logger::infof("Level recovered (%.1f <= %.1f), warning reset",
-                     distance, gConfig.warnDistanceCm - Sensor::HYSTERESIS_CM);
-    }
+    
+    // Save state to survive reboot
+    saveNotificationState();
 }
 
 // ---------------------------------------------------------------------------
@@ -209,7 +304,7 @@ void setup() {
     
     Logger::info("===========================================");
     Logger::info("Salt Level Monitor");
-    Logger::info("Version: 2.2.0 (WiFi + ntfy)");
+    Logger::info("Version: 2.3.0 (Consecutive Hours Filter)");
     Logger::info("Features: WiFi + MQTT + Bark + ntfy + OTA");
     Logger::info("Reset: Hold BOOT button for 5s to clear");
     Logger::info("===========================================");
@@ -225,10 +320,14 @@ void setup() {
     pinMode(Pins::RESET_BTN, INPUT_PULLUP);  // Use internal pull-up
     Logger::info("GPIO pins configured");
     
+    // Load notification state from NVS (survives reboot)
+    loadNotificationState();
+    
     // Set default configuration
     gConfig.fullDistanceCm  = Sensor::DEFAULT_FULL_DISTANCE_CM;
     gConfig.emptyDistanceCm = Sensor::DEFAULT_EMPTY_DISTANCE_CM;
     gConfig.warnDistanceCm  = Sensor::DEFAULT_WARN_DISTANCE_CM;
+    gConfig.consecutiveHoursThreshold = Notification::CONSECUTIVE_LOW_THRESHOLD;
     gConfig.language        = saltlevel::Language::ENGLISH;
     
     // Set OTA password from secrets.h or default

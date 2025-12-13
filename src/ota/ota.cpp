@@ -66,6 +66,7 @@ namespace saltlevel {
     cfg->fullDistanceCm  = prefs.getFloat("full_cm",  cfg->fullDistanceCm);
     cfg->emptyDistanceCm = prefs.getFloat("empty_cm", cfg->emptyDistanceCm);
     cfg->warnDistanceCm  = prefs.getFloat("warn_cm",  cfg->warnDistanceCm);
+    cfg->consecutiveHoursThreshold = prefs.getUChar("consec_hrs", cfg->consecutiveHoursThreshold);
 
     // Bark key
     char tmp[Limits::BARK_KEY_LENGTH];
@@ -111,6 +112,7 @@ namespace saltlevel {
     prefs.putFloat("full_cm",  cfg->fullDistanceCm);
     prefs.putFloat("empty_cm", cfg->emptyDistanceCm);
     prefs.putFloat("warn_cm",  cfg->warnDistanceCm);
+    prefs.putUChar("consec_hrs", cfg->consecutiveHoursThreshold);
     prefs.putString("bark_key", String(cfg->barkKey));
     prefs.putBool("bark_en", cfg->barkEnabled);
     prefs.putString("ntfy_topic", String(cfg->ntfyTopic));
@@ -136,6 +138,8 @@ namespace saltlevel {
       page.replace("{{STR_FULL}}",        "Distance minimale lorsque le réservoir est PLEIN (limite matérielle, cm) :");
       page.replace("{{STR_EMPTY}}",       "Distance lorsque le réservoir est VIDE (profondeur max, cm) :");
       page.replace("{{STR_WARN}}",        "Distance d'avertissement (cm) :");
+      page.replace("{{STR_CONSEC_HOURS}}", "Heures consécutives avant notification :");
+      page.replace("{{STR_CONSEC_HOURS_HELP}}", "Nombre d'heures consécutives de niveau bas avant d'envoyer une alerte (1-48)");
       
       // Bark strings
       page.replace("{{STR_BARK_KEY}}",    "Clé Bark (iOS) :");
@@ -162,6 +166,7 @@ namespace saltlevel {
       page.replace("{{STR_MEASURE}}",     "Mesurer maintenant");
       page.replace("{{STR_DISTANCE}}",    "Distance :");
       page.replace("{{STR_LEVEL}}",       "Remplissage :");
+      page.replace("{{STR_TOGGLE_THEME}}", "Changer le thème");
     } else {
       // English
       page.replace("{{STR_TITLE}}",       "Salt Level Monitor");
@@ -173,6 +178,8 @@ namespace saltlevel {
       page.replace("{{STR_FULL}}",        "Minimum distance when tank is FULL (hardware limit, cm):");
       page.replace("{{STR_EMPTY}}",       "Distance when tank is EMPTY (max depth, cm):");
       page.replace("{{STR_WARN}}",        "Warning distance (cm):");
+      page.replace("{{STR_CONSEC_HOURS}}", "Consecutive hours before notification:");
+      page.replace("{{STR_CONSEC_HOURS_HELP}}", "Number of consecutive hours at low level before sending an alert (1-48)");
       
       // Bark strings
       page.replace("{{STR_BARK_KEY}}",    "Bark key (iOS):");
@@ -199,6 +206,7 @@ namespace saltlevel {
       page.replace("{{STR_MEASURE}}",     "Measure now");
       page.replace("{{STR_DISTANCE}}",    "Distance:");
       page.replace("{{STR_LEVEL}}",       "Level:");
+      page.replace("{{STR_TOGGLE_THEME}}", "Toggle theme");
     }
 
     if (lang == Language::FRENCH) {
@@ -244,6 +252,12 @@ namespace saltlevel {
       return false;
     }
 
+    if (config->consecutiveHoursThreshold < 1 || config->consecutiveHoursThreshold > 48) {
+      Logger::errorf("Validation failed: consecutive hours %u not in range [1-48]",
+                    config->consecutiveHoursThreshold);
+      return false;
+    }
+
     Logger::debug("Configuration validation passed");
     return true;
   }
@@ -261,6 +275,7 @@ namespace saltlevel {
       page.replace("{{FULL_CM}}",  String(cfg->fullDistanceCm, 1));
       page.replace("{{EMPTY_CM}}", String(cfg->emptyDistanceCm, 1));
       page.replace("{{WARN_CM}}",  String(cfg->warnDistanceCm, 1));
+      page.replace("{{CONSEC_HOURS}}", String(cfg->consecutiveHoursThreshold));
       page.replace("{{BARK_KEY}}", String(cfg->barkKey));
       page.replace("{{BARK_EN_CHECKED}}", cfg->barkEnabled ? "checked" : "");
       page.replace("{{NTFY_TOPIC}}", String(cfg->ntfyTopic));
@@ -270,6 +285,7 @@ namespace saltlevel {
       page.replace("{{FULL_CM}}",  String(Sensor::DEFAULT_FULL_DISTANCE_CM, 1));
       page.replace("{{EMPTY_CM}}", String(Sensor::DEFAULT_EMPTY_DISTANCE_CM, 1));
       page.replace("{{WARN_CM}}",  String(Sensor::DEFAULT_WARN_DISTANCE_CM, 1));
+      page.replace("{{CONSEC_HOURS}}", String(Notification::CONSECUTIVE_LOW_THRESHOLD));
       page.replace("{{BARK_KEY}}", "");
       page.replace("{{BARK_EN_CHECKED}}", "");
       page.replace("{{NTFY_TOPIC}}", "");
@@ -302,6 +318,13 @@ namespace saltlevel {
     }
     if (server.hasArg("warn_cm")) {
       cfg->warnDistanceCm = server.arg("warn_cm").toFloat();
+    }
+    if (server.hasArg("consec_hours")) {
+      int hours = server.arg("consec_hours").toInt();
+      // Clamp to valid range [1-48]
+      if (hours < 1) hours = 1;
+      if (hours > 48) hours = 48;
+      cfg->consecutiveHoursThreshold = static_cast<uint8_t>(hours);
     }
     if (server.hasArg("bark_key")) {
       String key = server.arg("bark_key");
@@ -569,7 +592,7 @@ namespace saltlevel {
       char json[256];
       snprintf(json, sizeof(json),
         "{"
-          "\"version\":\"2.2.0\","
+          "\"version\":\"2.3.0\","
           "\"build\":\"%s\","
           "\"uptime_seconds\":%lu,"
           "\"uptime\":\"%s\""

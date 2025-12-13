@@ -4,7 +4,7 @@
 #include <Preferences.h>
 #include <DNSServer.h>
 #include "esp_task_wdt.h"
-#include "../secrets.h"
+#include "../secrets.h_tmp"
 #include "../constants.h"
 #include "../logger.h"
 #include "wifi.h"

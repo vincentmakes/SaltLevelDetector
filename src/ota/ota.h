@@ -15,7 +15,8 @@ namespace saltlevel {
   struct Config {
     float    fullDistanceCm;      // Tank FULL at this distance (hardware min)
     float    emptyDistanceCm;     // Tank EMPTY at this distance (max depth)
-    float    warnDistanceCm;      // Bark warning distance
+    float    warnDistanceCm;      // Warning distance threshold
+    uint8_t  consecutiveHoursThreshold;  // Hours of low level before notification
     char     barkKey[128];        // Bark device key
     char     otaPassword[64];     // OTA update password
     char     ntfyTopic[64];       // ntfy topic name
