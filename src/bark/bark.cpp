@@ -2,7 +2,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
-#include "../secrets.h_tmp"
+#include "../secrets.h"
 #include "../logger.h"
 
 #ifndef BARK_SERVER

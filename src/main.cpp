@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <Preferences.h>
 #include "esp_task_wdt.h"
-#include "secrets.h_tmp"
+#include "secrets.h"
 #include "constants.h"
 #include "logger.h"
 

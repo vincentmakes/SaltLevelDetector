@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include "../secrets.h_tmp"
+#include "../secrets.h"
 #include "../constants.h"
 #include "../logger.h"
 #include "mqtt.h"
